@@ -1,11 +1,10 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { auth, db, User } from '../lib/firebase';
-import { User as FirebaseUser, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { supabase, User } from '../lib/supabase';
+import { User as SupabaseUser } from '@supabase/supabase-js';
 
 interface AuthContextType {
   user: User | null;
-  firebaseUser: FirebaseUser | null;
+  supabaseUser: SupabaseUser | null;
   loading: boolean;
   signUp: (email: string, password: string, role: string, fullName: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
@@ -24,85 +23,103 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [supabaseUser, setSupabaseUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchUserProfile = async (userId: string) => {
-    try {
-      const userDoc = await getDoc(doc(db, 'users', userId));
-      if (userDoc.exists()) {
-        return userDoc.data() as User;
-      }
-      return null;
-    } catch (error) {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
       console.error('Error fetching user profile:', error);
       return null;
     }
+
+    return data;
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        setFirebaseUser(firebaseUser);
-        const profile = await fetchUserProfile(firebaseUser.uid);
-        setUser(profile);
-      } else {
-        setFirebaseUser(null);
-        setUser(null);
-      }
-      setLoading(false);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      (async () => {
+        if (session?.user) {
+          setSupabaseUser(session.user);
+          const profile = await fetchUserProfile(session.user.id);
+          setUser(profile);
+        }
+        setLoading(false);
+      })();
     });
 
-    return () => unsubscribe();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      (async () => {
+        if (session?.user) {
+          setSupabaseUser(session.user);
+          const profile = await fetchUserProfile(session.user.id);
+          setUser(profile);
+        } else {
+          setSupabaseUser(null);
+          setUser(null);
+        }
+        setLoading(false);
+      })();
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signUp = async (email: string, password: string, role: string, fullName: string) => {
-    try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const firebaseUser = userCredential.user;
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
 
-      // Create user profile in Firestore
-      const userData: User = {
-        id: firebaseUser.uid,
-        email: firebaseUser.email!,
-        role: role as UserRole,
-        full_name: fullName,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+    if (error) throw error;
 
-      await setDoc(doc(db, 'users', firebaseUser.uid), {
-        ...userData,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-      });
+    if (data.user) {
+      const { error: profileError } = await supabase
+        .from('users')
+        .insert({
+          id: data.user.id,
+          email: data.user.email!,
+          role,
+          full_name: fullName,
+        });
 
-      setUser(userData);
-    } catch (error) {
-      throw error;
+      if (profileError) throw profileError;
+
+      const profile = await fetchUserProfile(data.user.id);
+      setUser(profile);
     }
   };
 
   const signIn = async (email: string, password: string) => {
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-      // User state will be updated by the onAuthStateChanged listener
-    } catch (error) {
-      throw error;
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) throw error;
+
+    if (data.user) {
+      const profile = await fetchUserProfile(data.user.id);
+      setUser(profile);
     }
   };
 
   const signOut = async () => {
-    try {
-      await firebaseSignOut(auth);
-      // User state will be updated by the onAuthStateChanged listener
-    } catch (error) {
-      throw error;
-    }
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+    setUser(null);
+    setSupabaseUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, firebaseUser, loading, signUp, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, supabaseUser, loading, signUp, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );
