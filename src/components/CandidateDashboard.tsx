@@ -1,8 +1,65 @@
 import { useAuth } from '../contexts/AuthContext';
 import { Vote, TrendingUp, Users, Calendar, LogOut } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { electionsService, candidatesService, votesService } from '../lib/firebaseServices';
+import { Election, Candidate } from '../lib/firebase';
 
 export const CandidateDashboard = () => {
   const { user, signOut } = useAuth();
+  const [myCandidates, setMyCandidates] = useState<Candidate[]>([]);
+  const [elections, setElections] = useState<Election[]>([]);
+  const [stats, setStats] = useState({
+    totalVotes: 0,
+    currentPosition: 0,
+    voterEngagement: 0
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      if (!user) return;
+      
+      try {
+        const [allCandidates, allElections] = await Promise.all([
+          candidatesService.getCandidatesByElection(''), // Get all candidates
+          electionsService.getAllElections()
+        ]);
+
+        // Filter candidates for current user
+        const myCandidatesData = allCandidates.filter(c => c.user_id === user.id);
+        setMyCandidates(myCandidatesData);
+        setElections(allElections);
+
+        // Calculate stats
+        let totalVotes = 0;
+        let currentPosition = 0;
+        
+        for (const candidate of myCandidatesData) {
+          const votes = await votesService.getVoteCountForCandidate(candidate.id);
+          totalVotes += votes;
+          
+          // Get position in election
+          const results = await votesService.getElectionResults(candidate.election_id);
+          const position = results.findIndex(r => r.candidateId === candidate.id) + 1;
+          if (position > 0) {
+            currentPosition = position;
+          }
+        }
+
+        setStats({
+          totalVotes,
+          currentPosition,
+          voterEngagement: totalVotes > 0 ? Math.min(100, Math.round((totalVotes / 200) * 100)) : 0
+        });
+      } catch (error) {
+        console.error('Error fetching candidate data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -47,7 +104,7 @@ export const CandidateDashboard = () => {
               <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
                 <Vote className="w-6 h-6 text-blue-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">142</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.totalVotes}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Total Votes Received</h3>
             <p className="text-xs text-green-600 mt-2">+12% from yesterday</p>
@@ -58,7 +115,7 @@ export const CandidateDashboard = () => {
               <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
                 <TrendingUp className="w-6 h-6 text-green-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">2nd</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.currentPosition > 0 ? `${stats.currentPosition}${stats.currentPosition === 1 ? 'st' : stats.currentPosition === 2 ? 'nd' : stats.currentPosition === 3 ? 'rd' : 'th'}` : 'N/A'}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Current Position</h3>
             <p className="text-xs text-slate-500 mt-2">Out of 8 candidates</p>
@@ -69,7 +126,7 @@ export const CandidateDashboard = () => {
               <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
                 <Users className="w-6 h-6 text-amber-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">67%</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.voterEngagement}%</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Voter Engagement</h3>
             <p className="text-xs text-green-600 mt-2">Above average</p>
@@ -80,52 +137,62 @@ export const CandidateDashboard = () => {
           <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200">
             <h3 className="text-lg font-bold text-slate-900 mb-6">Your Elections</h3>
             <div className="space-y-4">
-              {[
-                { title: 'Student Council President 2025', status: 'Active', position: 2, votes: 142 },
-                { title: 'Club Committee Elections', status: 'Pending Approval', position: null, votes: 0 },
-              ].map((election, i) => (
-                <div
-                  key={i}
-                  className="p-4 border border-slate-200 rounded-xl hover:border-blue-300 transition-colors"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <h4 className="font-medium text-slate-900 mb-2">{election.title}</h4>
-                      <div className="flex items-center gap-3 text-sm">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            election.status === 'Active'
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-amber-100 text-amber-700'
-                          }`}
-                        >
-                          {election.status}
-                        </span>
-                        {election.position && (
-                          <>
-                            <span className="text-slate-600">{election.votes} votes</span>
-                            <span className="text-slate-600">Position #{election.position}</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    <button className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors">
-                      View Details
-                    </button>
-                  </div>
-                  {election.status === 'Active' && (
-                    <div className="mt-4">
-                      <div className="flex items-center justify-between text-xs text-slate-600 mb-2">
-                        <span>Vote Progress</span>
-                        <span>142 / 456 total votes</span>
-                      </div>
-                      <div className="w-full bg-slate-100 rounded-full h-2">
-                        <div className="bg-blue-600 h-2 rounded-full" style={{ width: '31%' }}></div>
-                      </div>
-                    </div>
-                  )}
+              {loading ? (
+                <div className="text-center py-8">
+                  <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                  <p className="text-slate-600">Loading your elections...</p>
                 </div>
-              ))}
+              ) : myCandidates.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-slate-600">You haven't applied for any elections yet</p>
+                </div>
+              ) : (
+                myCandidates.map((candidate) => {
+                  const election = elections.find(e => e.id === candidate.election_id);
+                  return (
+                    <div
+                      key={candidate.id}
+                      className="p-4 border border-slate-200 rounded-xl hover:border-blue-300 transition-colors"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h4 className="font-medium text-slate-900 mb-2">{election?.title || 'Unknown Election'}</h4>
+                          <div className="flex items-center gap-3 text-sm">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                candidate.status === 'approved'
+                                  ? 'bg-green-100 text-green-700'
+                                  : candidate.status === 'pending'
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-red-100 text-red-700'
+                              }`}
+                            >
+                              {candidate.status}
+                            </span>
+                            {candidate.status === 'approved' && (
+                              <span className="text-slate-600">{stats.totalVotes} votes</span>
+                            )}
+                          </div>
+                        </div>
+                        <button className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors">
+                          View Details
+                        </button>
+                      </div>
+                      {candidate.status === 'approved' && (
+                        <div className="mt-4">
+                          <div className="flex items-center justify-between text-xs text-slate-600 mb-2">
+                            <span>Vote Progress</span>
+                            <span>{stats.totalVotes} total votes</span>
+                          </div>
+                          <div className="w-full bg-slate-100 rounded-full h-2">
+                            <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${Math.min(100, stats.voterEngagement)}%` }}></div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
             <button className="w-full mt-4 py-3 border-2 border-dashed border-slate-300 rounded-xl text-slate-600 font-medium hover:border-blue-400 hover:text-blue-600 transition-colors">
               Apply for New Election

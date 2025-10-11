@@ -3,6 +3,7 @@ import { Auth } from './components/Auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { CandidateDashboard } from './components/CandidateDashboard';
 import { VoterDashboard } from './components/VoterDashboard';
+import { AdminPanel } from './components/AdminPanel';
 
 function App() {
   const { user, loading } = useAuth();
@@ -20,6 +21,13 @@ function App() {
 
   if (!user) {
     return <Auth />;
+  }
+
+  // Check for admin panel access (you can modify this logic as needed)
+  const isAdminPanel = window.location.pathname === '/admin-panel';
+  
+  if (isAdminPanel) {
+    return <AdminPanel />;
   }
 
   switch (user.role) {
