@@ -4,6 +4,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { CandidateDashboard } from './components/CandidateDashboard';
 import { VoterDashboard } from './components/VoterDashboard';
 import { AdminPanel } from './components/AdminPanel';
+import VotingRules from './components/VotingRules';
 
 function App() {
   const { user, loading } = useAuth();

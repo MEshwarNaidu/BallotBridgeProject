@@ -19,7 +19,20 @@ export const Auth = () => {
     setLoading(true);
 
     try {
-      if (isSignUp) {
+      // Check for hardcoded admin credentials
+      if (!isSignUp && email === 'admin@rymec.com' && password === '182618') {
+        // Create admin user if it doesn't exist
+        try {
+          await signUp('admin@rymec.com', '182618', 'admin', 'Admin User');
+        } catch (signUpError: any) {
+          // If user already exists, try to sign in
+          if (signUpError.code === 'auth/email-already-in-use') {
+            await signIn('admin@rymec.com', '182618');
+          } else {
+            throw signUpError;
+          }
+        }
+      } else if (isSignUp) {
         await signUp(email, password, role, fullName);
       } else {
         await signIn(email, password);
@@ -165,7 +178,21 @@ export const Auth = () => {
           </form>
         </div>
 
-        <p className="text-center text-sm text-slate-600 mt-6">
+        <div className="text-center mt-6">
+          <button
+            type="button"
+            onClick={() => {
+              setEmail('admin@rymec.com');
+              setPassword('182618');
+              setIsSignUp(false);
+            }}
+            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            Quick Admin Login
+          </button>
+        </div>
+
+        <p className="text-center text-sm text-slate-600 mt-4">
           By continuing, you agree to our Terms of Service and Privacy Policy
         </p>
       </div>

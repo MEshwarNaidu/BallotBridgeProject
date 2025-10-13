@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isVoter() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'voter';
+    }
+    
+    function isCandidate() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'candidate';
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isValidEmail(email, allowedFormat) {
+      return allowedFormat == null || email.matches(allowedFormat);
+    }
+    
+    function isElectionActive(electionId) {
+      let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
+      let now = request.time;
+      return now >= election.start_date && now <= election.end_date;
+    }
+    
+    function hasUserVoted(electionId, userId) {
+      return exists(/databases/$(database)/documents/elections/$(electionId)/voters/$(userId)) &&
+             get(/databases/$(database)/documents/elections/$(electionId)/voters/$(userId)).data.hasVoted == true;
+    }
+    
+    function isEligibleVoter(electionId, userId) {
+      return exists(/databases/$(database)/documents/elections/$(electionId)/voters/$(userId));
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isAuthenticated() && isOwner(userId);
+      allow delete: if isAdmin();
+    }
+
+    // Elections collection
+    match /elections/{electionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+      
+      // Voters subcollection
+      match /voters/{voterId} {
+        allow read: if isAuthenticated();
+        allow create: if isAdmin();
+        allow update: if isAdmin() || (isOwner(voterId) && !hasUserVoted(electionId, voterId));
+        allow delete: if isAdmin();
+      }
+    }
+
+    // Candidates collection
+    match /candidates/{candidateId} {
+      allow read: if isAuthenticated();
+      allow create: if isCandidate() && isOwner(resource.data.user_id);
+      allow update: if isAdmin() || (isCandidate() && isOwner(resource.data.user_id));
+      allow delete: if isAdmin();
+    }
+
+    // Votes collection
+    match /votes/{voteId} {
+      allow read: if isAuthenticated();
+      allow create: if isVoter() && 
+                       isOwner(resource.data.voter_id) &&
+                       isEligibleVoter(resource.data.election_id, resource.data.voter_id) &&
+                       !hasUserVoted(resource.data.election_id, resource.data.voter_id) &&
+                       isElectionActive(resource.data.election_id);
+      allow update: if false; // Votes are immutable
+      allow delete: if isAdmin();
+    }
+
+    // Storage rules for Firebase Storage
+    match /{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && 
+                      (isAdmin() || 
+                       (isCandidate() && resource.name.matches('candidates/' + request.auth.uid + '/.*')));
+    }
+  }
+}
