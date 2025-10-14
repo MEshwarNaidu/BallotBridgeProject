@@ -24,13 +24,6 @@ function App() {
     return <Auth />;
   }
 
-  // Check for admin panel access (you can modify this logic as needed)
-  const isAdminPanel = window.location.pathname === '/admin-panel';
-  
-  if (isAdminPanel) {
-    return <AdminPanel />;
-  }
-
   switch (user.role) {
     case 'admin':
       return <AdminDashboard />;

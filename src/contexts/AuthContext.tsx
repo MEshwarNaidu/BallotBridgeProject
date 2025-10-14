@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut as firebaseSignOut, User as FirebaseUser } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db, User } from '../lib/firebase';
-import { User as FirebaseUser, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 interface AuthContextType {
   user: User | null;
@@ -31,7 +31,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const userDoc = await getDoc(doc(db, 'users', userId));
       if (userDoc.exists()) {
-        return userDoc.data() as User;
+        return { id: userDoc.id, ...userDoc.data() } as User;
       }
       return null;
     } catch (error) {
@@ -60,34 +60,37 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const firebaseUser = userCredential.user;
-
+      
       // Create user profile in Firestore
-      const userData: User = {
-        id: firebaseUser.uid,
-        email: firebaseUser.email!,
-        role: role as UserRole,
+      const userData: Omit<User, 'id'> = {
+        email,
+        role: role as any,
         full_name: fullName,
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       };
-
-      await setDoc(doc(db, 'users', firebaseUser.uid), {
-        ...userData,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-      });
-
-      setUser(userData);
+      
+      await setDoc(doc(db, 'users', firebaseUser.uid), userData);
+      
+      const profile = await fetchUserProfile(firebaseUser.uid);
+      setUser(profile);
+      setFirebaseUser(firebaseUser);
     } catch (error) {
+      console.error('Sign up error:', error);
       throw error;
     }
   };
 
   const signIn = async (email: string, password: string) => {
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      // User state will be updated by the onAuthStateChanged listener
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+      
+      const profile = await fetchUserProfile(firebaseUser.uid);
+      setUser(profile);
+      setFirebaseUser(firebaseUser);
     } catch (error) {
+      console.error('Sign in error:', error);
       throw error;
     }
   };
@@ -95,8 +98,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signOut = async () => {
     try {
       await firebaseSignOut(auth);
-      // User state will be updated by the onAuthStateChanged listener
+      setUser(null);
+      setFirebaseUser(null);
     } catch (error) {
+      console.error('Sign out error:', error);
       throw error;
     }
   };
