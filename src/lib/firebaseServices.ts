@@ -8,8 +8,7 @@ import {
   deleteDoc, 
   query, 
   where, 
-  orderBy, 
-  limit,
+  orderBy,
   serverTimestamp,
   Timestamp,
   writeBatch,
@@ -233,17 +232,6 @@ export const electionsService = {
       console.error('Error updating election:', error);
       throw error;
     }
-  },
-
-  // Delete election
-  async deleteElection(id: string): Promise<void> {
-    try {
-      const electionRef = doc(db, 'elections', id);
-      await deleteDoc(electionRef);
-    } catch (error) {
-      console.error('Error deleting election:', error);
-      throw error;
-    }
   }
 };
 
@@ -291,11 +279,12 @@ export const candidatesService = {
   },
 
   // Apply as candidate
-  async applyAsCandidate(candidateData: Omit<Candidate, 'id' | 'created_at' | 'updated_at'>): Promise<string> {
+  async applyAsCandidate(candidateData: Omit<Candidate, 'id' | 'created_at' | 'updated_at' | 'vote_count'>): Promise<string> {
     try {
       const candidatesRef = collection(db, 'candidates');
       const docRef = await addDoc(candidatesRef, {
         ...candidateData,
+        vote_count: 0,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
       });
@@ -348,14 +337,34 @@ export const candidatesService = {
 
 // Votes Service
 export const votesService = {
-  // Cast a vote with vote limit system
+  // Cast a vote with new voting restrictions
   async castVote(voteData: Omit<Vote, 'id' | 'created_at'>): Promise<string> {
     try {
-      // Check if user has already voted in this election
-      const hasVoted = await this.hasUserVoted(voteData.election_id, voteData.voter_id);
-      if (hasVoted) {
+      // Check if user has already voted using has_voted_for
+      const voterRef = doc(db, 'users', voteData.voter_id);
+      const voterDoc = await getDoc(voterRef);
+      
+      if (!voterDoc.exists()) {
+        throw new Error('Voter not found');
+      }
+      
+      const voterData = voterDoc.data();
+      const hasVotedFor = voterData.has_voted_for || {};
+      
+      if (hasVotedFor[voteData.election_id] === true) {
         throw new Error('You have already voted in this election');
       }
+
+      // Get candidate to increment vote_count
+      const candidateRef = doc(db, 'candidates', voteData.candidate_id);
+      const candidateDoc = await getDoc(candidateRef);
+      
+      if (!candidateDoc.exists()) {
+        throw new Error('Candidate not found');
+      }
+
+      const candidateData = candidateDoc.data();
+      const currentVoteCount = candidateData.vote_count || 0;
 
       // Use batch write to ensure atomicity
       const batch = writeBatch(db);
@@ -368,14 +377,21 @@ export const votesService = {
         created_at: serverTimestamp(),
       });
 
-      // Mark user as voted in voter records
-      const voterRecordRef = doc(db, 'elections', voteData.election_id, 'voters', voteData.voter_id);
-      batch.set(voterRecordRef, {
-        election_id: voteData.election_id,
-        user_id: voteData.voter_id,
-        hasVoted: true,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
+      // Update candidate vote_count
+      batch.update(candidateRef, {
+        vote_count: currentVoteCount + 1,
+        updated_at: serverTimestamp()
+      });
+
+      // Update voter's has_voted_for and voted_candidate_for
+      const updatedHasVotedFor = { ...hasVotedFor, [voteData.election_id]: true };
+      const votedCandidateFor = voterData.voted_candidate_for || {};
+      const updatedVotedCandidateFor = { ...votedCandidateFor, [voteData.election_id]: voteData.candidate_id };
+      
+      batch.update(voterRef, {
+        has_voted_for: updatedHasVotedFor,
+        voted_candidate_for: updatedVotedCandidateFor,
+        updated_at: serverTimestamp()
       });
 
       await batch.commit();
@@ -386,23 +402,19 @@ export const votesService = {
     }
   },
 
-  // Check if user has voted in an election
+  // Check if user has voted in an election using has_voted_for
   async hasUserVoted(electionId: string, voterId: string): Promise<boolean> {
     try {
-      // First check voter records
-      const voterRecordRef = doc(db, 'elections', electionId, 'voters', voterId);
-      const voterRecordSnap = await getDoc(voterRecordRef);
+      const voterRef = doc(db, 'users', voterId);
+      const voterDoc = await getDoc(voterRef);
       
-      if (voterRecordSnap.exists()) {
-        const data = voterRecordSnap.data();
-        return data.hasVoted === true;
+      if (voterDoc.exists()) {
+        const voterData = voterDoc.data();
+        const hasVotedFor = voterData.has_voted_for || {};
+        return hasVotedFor[electionId] === true;
       }
 
-      // Fallback to checking votes collection
-      const votesRef = collection(db, 'votes');
-      const q = query(votesRef, where('election_id', '==', electionId), where('voter_id', '==', voterId));
-      const querySnapshot = await getDocs(q);
-      return !querySnapshot.empty;
+      return false;
     } catch (error) {
       console.error('Error checking vote status:', error);
       throw error;
@@ -587,7 +599,7 @@ export const voterManagementService = {
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
       });
-    } catch (error) {
+    } catch (error: any) {
       // If document doesn't exist, create it
       if (error.code === 'not-found') {
         const voterRecordRef = doc(db, 'elections', electionId, 'voters', userId);
@@ -748,6 +760,8 @@ export const realtimeService = {
               ...doc.data(),
               created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
               updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
+              start_date: doc.data().start_date?.toDate?.()?.toISOString() || new Date().toISOString(),
+              end_date: doc.data().end_date?.toDate?.()?.toISOString() || new Date().toISOString(),
             })) as Election[];
             console.log('Elections updated:', elections.length);
             callback(elections);
@@ -846,11 +860,11 @@ export const electionListService = {
         }
         
         const electionData = electionDoc.data();
-        const currentVoterList = electionData.voterList || [];
+        const currentVoterList = electionData.allowed_voters || [];
         
         if (!currentVoterList.includes(userId)) {
           await updateDoc(electionRef, {
-            voterList: [...currentVoterList, userId],
+            allowed_voters: [...currentVoterList, userId],
             updated_at: serverTimestamp()
           });
         }
@@ -876,10 +890,10 @@ export const electionListService = {
         }
         
         const electionData = electionDoc.data();
-        const currentVoterList = electionData.voterList || [];
+        const currentVoterList = electionData.allowed_voters || [];
         
         await updateDoc(electionRef, {
-          voterList: currentVoterList.filter((id: string) => id !== userId),
+          allowed_voters: currentVoterList.filter((id: string) => id !== userId),
           updated_at: serverTimestamp()
         });
       });
@@ -904,11 +918,11 @@ export const electionListService = {
         }
         
         const electionData = electionDoc.data();
-        const currentCandidateList = electionData.candidateList || [];
+        const currentCandidateList = electionData.candidates || [];
         
         if (!currentCandidateList.includes(userId)) {
           await updateDoc(electionRef, {
-            candidateList: [...currentCandidateList, userId],
+            candidates: [...currentCandidateList, userId],
             updated_at: serverTimestamp()
           });
         }
@@ -934,10 +948,10 @@ export const electionListService = {
         }
         
         const electionData = electionDoc.data();
-        const currentCandidateList = electionData.candidateList || [];
+        const currentCandidateList = electionData.candidates || [];
         
         await updateDoc(electionRef, {
-          candidateList: currentCandidateList.filter((id: string) => id !== userId),
+          candidates: currentCandidateList.filter((id: string) => id !== userId),
           updated_at: serverTimestamp()
         });
       });
@@ -962,7 +976,7 @@ export const electionListService = {
         }
         
         const electionData = electionDoc.data();
-        const voterIds = electionData.voterList || [];
+        const voterIds = electionData.allowed_voters || [];
         
         if (voterIds.length === 0) return [];
         
@@ -1000,7 +1014,7 @@ export const electionListService = {
         }
         
         const electionData = electionDoc.data();
-        const candidateIds = electionData.candidateList || [];
+        const candidateIds = electionData.candidates || [];
         
         if (candidateIds.length === 0) return [];
         
@@ -1103,10 +1117,14 @@ export const electionStatusService = {
           const startDate = new Date(electionData.start_date);
           const endDate = new Date(electionData.end_date);
           
+          // Calculate status based on time logic:
+          // Upcoming: now < startTime
+          // Active: startTime ≤ now ≤ endTime
+          // Completed: now > endTime
           let newStatus = 'upcoming';
           if (startDate <= now && endDate >= now) {
             newStatus = 'active';
-          } else if (endDate < now) {
+          } else if (now > endDate) {
             newStatus = 'completed';
           }
           

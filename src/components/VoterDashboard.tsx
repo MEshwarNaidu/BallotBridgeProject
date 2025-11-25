@@ -1,13 +1,15 @@
 import { useAuth } from '../contexts/AuthContext';
-import { Vote, CheckCircle, Clock, TrendingUp, LogOut } from 'lucide-react';
+import { Vote, CheckCircle, Clock, TrendingUp, LogOut, FileText, Info, AlertCircle, Users, RefreshCw } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { electionsService, votesService } from '../lib/firebaseServices';
-import { Election, Vote as VoteType } from '../lib/firebase';
+import { electionsService, votesService, candidatesService, electionStatusService, realtimeService } from '../lib/firebaseServices';
+import { Election, Vote as VoteType, Candidate } from '../lib/firebase';
+import VotingRules from './VotingRules';
 
 export const VoterDashboard = () => {
-  const { user, signOut } = useAuth();
+  const { user, signOut, refreshUser } = useAuth();
   const [activeElections, setActiveElections] = useState<Election[]>([]);
   const [completedElections, setCompletedElections] = useState<Election[]>([]);
+  const [upcomingElections, setUpcomingElections] = useState<Election[]>([]);
   const [myVotes, setMyVotes] = useState<VoteType[]>([]);
   const [stats, setStats] = useState({
     availableElections: 0,
@@ -15,46 +17,272 @@ export const VoterDashboard = () => {
     pendingVotes: 0
   });
   const [loading, setLoading] = useState(true);
+  const [votingError, setVotingError] = useState<string | null>(null);
+  const [showVotingModal, setShowVotingModal] = useState(false);
+  const [showVotingRules, setShowVotingRules] = useState(false);
+  const [showEmailValidationModal, setShowEmailValidationModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
+  const [selectedElection, setSelectedElection] = useState<Election | null>(null);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
+  const [emailValidationError, setEmailValidationError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+
+  // Function to open voting modal and load candidates
+  const handleOpenVotingModal = async (election: Election) => {
+    setSelectedElection(election);
+    setSelectedCandidate(null);
+    setVotingError(null);
+    
+    try {
+      // Fetch all candidates for this election that are approved
+      const allCandidates = await candidatesService.getCandidatesByElection(election.id);
+      console.log(`Candidates for election ${election.title}:`, allCandidates.length);
+      
+      // Get candidate IDs from election.candidates array (if specified by admin)
+      const assignedCandidateIds = election.candidates || [];
+      
+      // Filter to show only approved candidates
+      // If admin has assigned specific candidates, show only those; otherwise show all approved
+      const approvedCandidates = assignedCandidateIds.length > 0
+        ? allCandidates.filter(c => c.status === 'approved' && assignedCandidateIds.includes(c.id))
+        : allCandidates.filter(c => c.status === 'approved');
+      
+      console.log(`Approved candidates for voting:`, approvedCandidates.length);
+      setCandidates(approvedCandidates);
+      setShowVotingModal(true);
+    } catch (error) {
+      console.error('Error loading candidates:', error);
+      setVotingError('Failed to load candidates');
+    }
+  };
+
+  // Function to handle selecting a candidate
+  const handleSelectCandidate = (candidate: Candidate) => {
+    setSelectedCandidate(candidate);
+  };
+
+  // Function to confirm and cast the vote
+  const handleConfirmVote = async () => {
+    if (!selectedCandidate || !selectedElection) return;
+    
+    // Verify election is still active before voting
+    if (selectedElection.status !== 'active') {
+      setVotingError('This election is no longer active. Please refresh the page.');
+      return;
+    }
+    
+    await handleCastVote(selectedCandidate.id);
+  };
+
+  // Function to handle casting a vote
+  const handleCastVote = async (candidateId: string) => {
+    if (!user || !selectedElection) return;
+    
+    try {
+      setVotingError(null);
+      // Cast the vote through the service
+      await votesService.castVote({
+        election_id: selectedElection.id,
+        candidate_id: candidateId,
+        voter_id: user.id
+      });
+      
+      // Close the modal
+      setShowVotingModal(false);
+      setSelectedElection(null);
+      
+      // Refresh user data to get updated has_voted_for
+      await refreshUser();
+      
+      // Wait a bit for user state to update, then reload the page for a clean refresh
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } catch (error: any) {
+      setVotingError(error.message || 'Failed to cast vote');
+    }
+  };
+
+  // Function to handle email validation
+  const handleEmailValidation = (email: string) => {
+    if (!selectedElection || !selectedElection.allowedEmailFormat) {
+      setShowEmailValidationModal(false);
+      setShowVotingModal(true);
+      return;
+    }
+    
+    // Check if email contains the required keyword
+    if (email.toLowerCase().includes(selectedElection.allowedEmailFormat.toLowerCase())) {
+      setEmailValidationError(null);
+      setShowEmailValidationModal(false);
+      setShowVotingModal(true);
+    } else {
+      setEmailValidationError(`Your email must contain "${selectedElection.allowedEmailFormat}" to participate in this election.`);
+    }
+  };
+
+  // Manual refresh function
+  const handleRefresh = async () => {
+    if (!user) return;
+    
+    setRefreshing(true);
+    try {
+      console.log('Manual refresh triggered - updating election statuses...');
+      
+      // Force update all election statuses
+      await electionStatusService.updateAllElectionStatuses();
+      
+      // Re-fetch elections with updated statuses
+      const allElections = await electionsService.getAllElections();
+      console.log('Refreshed elections:', allElections.map(e => ({ 
+        id: e.id, 
+        title: e.title, 
+        status: e.status,
+        start_date: e.start_date,
+        end_date: e.end_date
+      })));
+      
+      // Filter elections for this voter
+      const hasVotedFor = user.has_voted_for || {};
+      
+      const userActiveElections = allElections.filter(e => {
+        const allowedVoters = e.allowed_voters || [];
+        const hasVoted = hasVotedFor[e.id] === true;
+        const shouldShow = allowedVoters.includes(user.id) && e.status === 'active' && !hasVoted;
+        console.log(`Refresh filtering - Election ${e.title}:`, { 
+          allowed: allowedVoters.includes(user.id), 
+          status: e.status, 
+          voted: hasVoted, 
+          show: shouldShow 
+        });
+        return shouldShow;
+      });
+
+      const userCompletedElections = allElections.filter(e => {
+        const allowedVoters = e.allowed_voters || [];
+        return allowedVoters.includes(user.id) && e.status === 'completed';
+      });
+
+      const userUpcomingElections = allElections.filter(e => {
+        const allowedVoters = e.allowed_voters || [];
+        return allowedVoters.includes(user.id) && e.status === 'upcoming';
+      });
+      
+      console.log('Refresh results:', { 
+        active: userActiveElections.length, 
+        completed: userCompletedElections.length, 
+        upcoming: userUpcomingElections.length 
+      });
+      
+      setActiveElections(userActiveElections);
+      setCompletedElections(userCompletedElections);
+      setUpcomingElections(userUpcomingElections);
+
+      // Update stats
+      const votedCount = Object.keys(hasVotedFor).filter(electionId => hasVotedFor[electionId]).length;
+      setStats({
+        availableElections: userActiveElections.length,
+        votesCast: votedCount,
+        pendingVotes: userActiveElections.length
+      });
+      
+      setLastRefresh(new Date());
+      console.log('Refresh completed successfully');
+    } catch (error) {
+      console.error('Error during refresh:', error);
+      setVotingError('Failed to refresh elections. Please try again.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchData = async () => {
-      if (!user) return;
-      
+    if (!user) return;
+
+    // Update election statuses on mount
+    const updateStatuses = async () => {
       try {
-        const [allElections, allVotes] = await Promise.all([
-          electionsService.getAllElections(),
-          votesService.getVotesByElection('') // Get all votes for this user
-        ]);
-
-        // Filter votes for current user
-        const userVotes = allVotes.filter(v => v.voter_id === user.id);
-        setMyVotes(userVotes);
-
-        // Separate active and completed elections
-        const active = allElections.filter(e => e.status === 'active');
-        const completed = allElections.filter(e => e.status === 'completed');
-        
-        setActiveElections(active);
-        setCompletedElections(completed);
-
-        // Calculate stats
-        const availableElections = active.length;
-        const votesCast = userVotes.length;
-        const pendingVotes = availableElections - votesCast;
-
-        setStats({
-          availableElections,
-          votesCast,
-          pendingVotes
-        });
+        await electionStatusService.updateAllElectionStatuses();
       } catch (error) {
-        console.error('Error fetching voter data:', error);
-      } finally {
-        setLoading(false);
+        console.warn('Failed to update election statuses:', error);
       }
     };
+    
+    updateStatuses();
 
-    fetchData();
+    // Set up real-time listener for elections
+    const unsubscribe = realtimeService.subscribeToElections(async (electionsData: Election[]) => {
+      console.log('Voter Dashboard - Elections updated:', electionsData.length);
+      
+      // Update statuses for all elections
+      await electionStatusService.updateAllElectionStatuses();
+      
+      // Re-fetch to get updated statuses
+      const allElections = await electionsService.getAllElections();
+      console.log('All elections with status:', allElections.map(e => ({ id: e.id, title: e.title, status: e.status, start: e.start_date, end: e.end_date })));
+      
+      // Filter elections where user is in allowed_voters list
+      const hasVotedFor = user.has_voted_for || {};
+      
+      // Active elections: user in allowed_voters, status='active', hasn't voted
+      const userActiveElections = allElections.filter(e => {
+        const allowedVoters = e.allowed_voters || [];
+        const hasVoted = hasVotedFor[e.id] === true;
+        const isActive = e.status === 'active';
+        const isAllowed = allowedVoters.includes(user.id);
+        const shouldShow = isAllowed && isActive && !hasVoted;
+        console.log(`Filtering election ${e.title} (ID: ${e.id}):`, {
+          isAllowed,
+          isActive,
+          hasVoted,
+          shouldShow,
+          status: e.status,
+          allowedVoters: allowedVoters.includes(user.id),
+          userId: user.id
+        });
+        return shouldShow;
+      });
+
+      // Completed elections: user in allowed_voters, status='completed'
+      const userCompletedElections = allElections.filter(e => {
+        const allowedVoters = e.allowed_voters || [];
+        return allowedVoters.includes(user.id) && e.status === 'completed';
+      });
+
+      // Upcoming elections: user in allowed_voters, status='upcoming'
+      const userUpcomingElections = allElections.filter(e => {
+        const allowedVoters = e.allowed_voters || [];
+        return allowedVoters.includes(user.id) && e.status === 'upcoming';
+      });
+      
+      console.log('Filtered elections - Active:', userActiveElections.length, 'Upcoming:', userUpcomingElections.length, 'Completed:', userCompletedElections.length);
+      
+      setActiveElections(userActiveElections);
+      setCompletedElections(userCompletedElections);
+      setUpcomingElections(userUpcomingElections);
+
+      // Calculate stats
+      const votedCount = Object.keys(hasVotedFor).filter(electionId => hasVotedFor[electionId]).length;
+      const availableElections = userActiveElections.length;
+      const votesCast = votedCount;
+      const pendingVotes = availableElections - votesCast;
+
+      setStats({
+        availableElections,
+        votesCast,
+        pendingVotes
+      });
+      
+      setLastRefresh(new Date());
+      setLoading(false);
+    });
+
+    // Cleanup listener on unmount
+    return () => {
+      unsubscribe();
+    };
   }, [user]);
 
   return (
@@ -102,13 +330,26 @@ export const VoterDashboard = () => {
               <h2 className="text-3xl font-bold text-slate-900 mb-2">Welcome, {user?.full_name || 'Voter'}</h2>
               <p className="text-slate-600">Your voice matters. Cast your vote and make a difference.</p>
             </div>
-            <button
-              onClick={() => setShowVotingRules(true)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-            >
-              <FileText className="w-4 h-4" />
-              Voting Rules
-            </button>
+            <div className="flex items-center gap-3">
+              <div className="text-right text-sm text-slate-500">
+                <p>Last updated: {lastRefresh.toLocaleTimeString()}</p>
+              </div>
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+              <button
+                onClick={() => setShowVotingRules(true)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+              >
+                <FileText className="w-4 h-4" />
+                Voting Rules
+              </button>
+            </div>
           </div>
         </div>
 
@@ -118,7 +359,7 @@ export const VoterDashboard = () => {
               <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
                 <Vote className="w-6 h-6 text-blue-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">3</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.availableElections}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Available Elections</h3>
           </div>
@@ -128,7 +369,7 @@ export const VoterDashboard = () => {
               <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
                 <CheckCircle className="w-6 h-6 text-green-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">1</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.votesCast}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Votes Cast</h3>
           </div>
@@ -138,7 +379,7 @@ export const VoterDashboard = () => {
               <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
                 <Clock className="w-6 h-6 text-amber-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">2</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.pendingVotes}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Pending Votes</h3>
           </div>
@@ -191,7 +432,7 @@ export const VoterDashboard = () => {
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
                             <span className="text-blue-600 font-medium">
-                              {countdowns[election.id] || 'Starting soon...'}
+                              {daysUntilStart > 0 ? `Starts in ${daysUntilStart} day${daysUntilStart !== 1 ? 's' : ''}` : 'Starting soon'}
                             </span>
                           </span>
                           <span className="text-slate-400">Ends {endDate.toLocaleDateString()}</span>
@@ -218,7 +459,8 @@ export const VoterDashboard = () => {
                   </div>
                 ) : (
                   activeElections.map((election) => {
-                    const hasVoted = myVotes.some(v => v.election_id === election.id);
+                    const hasVotedFor = user?.has_voted_for || {};
+                    const hasVoted = hasVotedFor[election.id] === true;
                     const endDate = new Date(election.end_date);
                     const now = new Date();
                     const timeLeft = endDate.getTime() - now.getTime();
@@ -238,9 +480,13 @@ export const VoterDashboard = () => {
                               </span>
                               <span>Ends in {daysLeft} days</span>
                             </div>
+                            <p className="text-sm text-slate-500 mt-2">{election.description}</p>
                           </div>
                           {!hasVoted && (
-                            <button className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20">
+                            <button 
+                              onClick={() => handleOpenVotingModal(election)}
+                              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20"
+                            >
                               Vote Now
                             </button>
                           )}
@@ -248,9 +494,16 @@ export const VoterDashboard = () => {
                         <div className="flex items-center justify-between text-xs text-slate-500 pt-3 border-t border-slate-100">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
-                            {hasVoted ? 'You have voted' : 'Voting open'}
+                            {hasVoted ? (
+                              <span className="text-green-600 font-medium">You have voted</span>
+                            ) : (
+                              'Voting open'
+                            )}
                           </span>
-                          <button className="text-blue-600 hover:text-blue-700 font-medium">
+                          <button 
+                            onClick={() => handleOpenVotingModal(election)}
+                            className="text-blue-600 hover:text-blue-700 font-medium"
+                          >
                             View Candidates
                           </button>
                         </div>
@@ -264,35 +517,37 @@ export const VoterDashboard = () => {
             <div className="bg-white rounded-2xl p-6 border border-slate-200">
               <h3 className="text-lg font-bold text-slate-900 mb-6">Completed Elections</h3>
               <div className="space-y-4">
-                {[
-                  {
-                    title: 'Sports Captain Selection 2024',
-                    winner: 'Alex Johnson',
-                    yourVote: 'Alex Johnson',
-                    totalVotes: 567,
-                  },
-                ].map((election, i) => (
-                  <div key={i} className="p-4 border border-slate-200 rounded-xl bg-slate-50">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h4 className="font-medium text-slate-900 mb-2">{election.title}</h4>
-                        <div className="space-y-1 text-sm">
-                          <p className="text-slate-600">
-                            Winner: <span className="font-medium text-slate-900">{election.winner}</span>
-                          </p>
-                          <p className="text-slate-600">
-                            You voted for: <span className="font-medium text-slate-900">{election.yourVote}</span>
-                          </p>
-                          <p className="text-slate-500">{election.totalVotes} total votes</p>
+                {completedElections.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-slate-600">No completed elections</p>
+                  </div>
+                ) : (
+                  completedElections.map((election) => {
+                    const hasVotedFor = user?.has_voted_for || {};
+                    const votedCandidateFor = user?.voted_candidate_for || {};
+                    const hasVoted = hasVotedFor[election.id] === true;
+                    const candidateId = votedCandidateFor[election.id];
+                    
+                    return (
+                      <div key={election.id} className="p-4 border border-slate-200 rounded-xl bg-slate-50">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h4 className="font-medium text-slate-900 mb-2">{election.title}</h4>
+                            <div className="space-y-1 text-sm">
+                              <p className="text-slate-600">{election.description}</p>
+                              <p className="text-slate-600">
+                                Your Vote: <span className="font-medium text-slate-900">
+                                  {hasVoted ? 'Voted' : 'Not voted'}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+                          <CheckCircle className="w-5 h-5 text-green-600" />
                         </div>
                       </div>
-                      <CheckCircle className="w-5 h-5 text-green-600" />
-                    </div>
-                    <button className="mt-3 text-xs text-blue-600 hover:text-blue-700 font-medium">
-                      View Full Results
-                    </button>
-                  </div>
-                ))}
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>
@@ -337,55 +592,6 @@ export const VoterDashboard = () => {
               </div>
             </div>
           </div>
-
-          {/* Completed Elections */}
-          {completedElections.length > 0 && (
-            <div className="bg-white rounded-2xl p-6 border border-slate-200">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center">
-                  <CheckCircle className="w-5 h-5 text-slate-600" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">Completed Elections</h3>
-                  <p className="text-sm text-slate-500">Elections that have ended</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {completedElections.map((election) => {
-                  const endDate = new Date(election.end_date);
-                  const hasVoted = myVotes.some(vote => vote.election_id === election.id);
-                  
-                  return (
-                    <div key={election.id} className="p-4 border border-slate-200 rounded-xl hover:shadow-md transition-shadow">
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1">
-                          <h4 className="font-medium text-slate-900 mb-1">{election.title}</h4>
-                          <p className="text-sm text-slate-500">{election.description}</p>
-                        </div>
-                        <span className="px-2 py-1 bg-slate-100 text-slate-600 text-xs font-medium rounded-full">
-                          Completed
-                        </span>
-                      </div>
-                      
-                      <div className="space-y-2 text-xs text-slate-500">
-                        <div className="flex justify-between">
-                          <span>Ended:</span>
-                          <span>{endDate.toLocaleDateString()}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Your Vote:</span>
-                          <span className={hasVoted ? 'text-green-600 font-medium' : 'text-slate-400'}>
-                            {hasVoted ? 'Voted' : 'Not voted'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
@@ -414,6 +620,15 @@ export const VoterDashboard = () => {
                 </p>
               </div>
 
+              {votingError && (
+                <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-5 h-5 text-red-600" />
+                    <p className="text-sm text-red-800">{votingError}</p>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4">
                 <h4 className="font-medium text-slate-900">Select your candidate:</h4>
                 {candidates.length === 0 ? (
@@ -421,27 +636,74 @@ export const VoterDashboard = () => {
                     <p className="text-slate-600">No approved candidates available for this election</p>
                   </div>
                 ) : (
-                  candidates.map((candidate) => (
-                  <div
-                    key={candidate.id}
-                    className="p-4 border border-slate-200 rounded-lg hover:border-blue-300 transition-colors cursor-pointer"
-                    onClick={() => handleCastVote(candidate.id)}
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white font-bold">
-                        {candidate.name.charAt(0)}
+                  <>
+                    {candidates.map((candidate) => (
+                      <div
+                        key={candidate.id}
+                        className={`p-4 border-2 rounded-lg transition-all cursor-pointer ${
+                          selectedCandidate?.id === candidate.id
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-slate-200 hover:border-blue-300'
+                        }`}
+                        onClick={() => handleSelectCandidate(candidate)}
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white font-bold">
+                            {candidate.name.charAt(0)}
+                          </div>
+                          <div className="flex-1">
+                            <h5 className="font-medium text-slate-900">{candidate.name}</h5>
+                            <p className="text-sm text-slate-600">{candidate.position}</p>
+                            {candidate.bio && (
+                              <p className="text-sm text-slate-500 mt-1">{candidate.bio}</p>
+                            )}
+                          </div>
+                          <div className={`w-6 h-6 border-2 rounded-full flex items-center justify-center ${
+                            selectedCandidate?.id === candidate.id
+                              ? 'border-blue-500 bg-blue-500'
+                              : 'border-slate-300'
+                          }`}>
+                            {selectedCandidate?.id === candidate.id && (
+                              <CheckCircle className="w-5 h-5 text-white" />
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex-1">
-                        <h5 className="font-medium text-slate-900">{candidate.name}</h5>
-                        <p className="text-sm text-slate-600">{candidate.position}</p>
-                        {candidate.bio && (
-                          <p className="text-sm text-slate-500 mt-1">{candidate.bio}</p>
-                        )}
+                    ))}
+                    
+                    {selectedCandidate && (
+                      <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+                        <div className="flex items-start gap-3">
+                          <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
+                          <div>
+                            <h5 className="font-medium text-green-900 mb-1">Ready to vote for:</h5>
+                            <p className="text-green-800">
+                              <strong>{selectedCandidate.name}</strong> - {selectedCandidate.position}
+                            </p>
+                            <p className="text-sm text-green-700 mt-2">
+                              Click "Cast Vote" below to confirm your choice. This action cannot be undone.
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                      <div className="w-6 h-6 border-2 border-slate-300 rounded-full"></div>
+                    )}
+                    
+                    <div className="flex gap-3 mt-6">
+                      <button
+                        onClick={() => setShowVotingModal(false)}
+                        className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleConfirmVote}
+                        disabled={!selectedCandidate}
+                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                      >
+                        Cast Vote
+                      </button>
                     </div>
-                  </div>
-                  ))
+                  </>
                 )}
               </div>
             </div>

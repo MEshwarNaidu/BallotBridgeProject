@@ -1,7 +1,7 @@
 import { useAuth } from '../contexts/AuthContext';
-import { ArrowLeft, Users, Vote, Calendar, CheckCircle, XCircle, AlertCircle, User as UserIcon, Phone, FileText, TrendingUp, Clock } from 'lucide-react';
+import { ArrowLeft, Users, Vote, Calendar, CheckCircle, AlertCircle, User as UserIcon, Phone, FileText, Clock } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { candidatesService, votesService, electionStatsService, electionListService } from '../lib/firebaseServices';
+import { candidatesService, electionStatsService, electionListService } from '../lib/firebaseServices';
 import { Election, Candidate, ElectionStats, User } from '../lib/firebase';
 
 interface ElectionDetailsDashboardProps {

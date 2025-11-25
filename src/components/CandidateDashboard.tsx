@@ -42,6 +42,11 @@ export const CandidateDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+  const [showScoreboardModal, setShowScoreboardModal] = useState(false);
+  const [scoreboardElection, setScoreboardElection] = useState<Election | null>(null);
+  const [scoreboardCandidates, setScoreboardCandidates] = useState<Candidate[]>([]);
+  const [scoreboardLoading, setScoreboardLoading] = useState(false);
+  const [scoreboardUnsubscribe, setScoreboardUnsubscribe] = useState<(() => void) | null>(null);
 
   const updateAvailableElections = (electionsData: Election[], candidatesData: Candidate[]) => {
     const now = new Date();
@@ -123,8 +128,8 @@ export const CandidateDashboard = () => {
         
         for (const candidate of myCandidates) {
           if (candidate.status === 'approved') {
-            const votes = await votesService.getVoteCountForCandidate(candidate.id);
-            totalVotes += votes;
+            // Use vote_count from candidate object instead of fetching separately
+            totalVotes += candidate.vote_count || 0;
           }
         }
 
@@ -147,11 +152,41 @@ export const CandidateDashboard = () => {
     };
   }, [user]);
 
+  // Recalculate stats whenever myCandidates change
+  useEffect(() => {
+    const calculateStats = () => {
+      try {
+        let totalVotes = 0;
+        
+        for (const candidate of myCandidates) {
+          if (candidate.status === 'approved') {
+            // Use vote_count from candidate object
+            totalVotes += candidate.vote_count || 0;
+          }
+        }
+
+        setStats({
+          totalVotes,
+          currentPosition: 0, // TODO: Calculate actual position based on ranking
+          voterEngagement: totalVotes > 0 ? Math.min(100, Math.round((totalVotes / 200) * 100)) : 0
+        });
+      } catch (error) {
+        console.error('Error calculating stats:', error);
+      }
+    };
+
+    calculateStats();
+  }, [myCandidates]);
+
   const handleApplyForElection = (election: Election) => {
     // Check if user is in the candidate list (if candidate list exists)
-    if (election.candidateList && election.candidateList.length > 0) {
-      if (!election.candidateList.includes(user?.id || '')) {
-        setError('You are not authorized to apply for this election. Only selected candidates can participate.');
+    const candidates = election.candidates || [];
+    if (candidates.length > 0) {
+      // Note: election.candidates contains candidate IDs, not user IDs
+      // We need to check if the user has already applied
+      const existingApplication = myCandidates.find(c => c.election_id === election.id);
+      if (existingApplication) {
+        setError('You have already applied for this election.');
         return;
       }
     }
@@ -362,6 +397,34 @@ export const CandidateDashboard = () => {
     }
   };
 
+  const handleViewScoreboard = async (election: Election) => {
+    setScoreboardElection(election);
+    setShowScoreboardModal(true);
+    setScoreboardLoading(true);
+    
+    try {
+      // Clean up previous subscription if exists
+      if (scoreboardUnsubscribe) {
+        scoreboardUnsubscribe();
+      }
+
+      // Set up real-time subscription for candidates
+      const unsubscribe = realtimeService.subscribeToCandidates((allCandidates) => {
+        // Filter to this election only
+        const electionCandidates = allCandidates.filter(c => c.election_id === election.id && c.status === 'approved');
+        // Sort by vote_count descending
+        electionCandidates.sort((a, b) => (b.vote_count || 0) - (a.vote_count || 0));
+        setScoreboardCandidates(electionCandidates);
+        setScoreboardLoading(false);
+      });
+
+      setScoreboardUnsubscribe(() => unsubscribe);
+    } catch (error) {
+      console.error('Error loading scoreboard:', error);
+      setScoreboardLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       <nav className="bg-white border-b border-slate-200">
@@ -436,7 +499,7 @@ export const CandidateDashboard = () => {
               <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
                 <Vote className="w-6 h-6 text-blue-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">142</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.totalVotes}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Total Votes Received</h3>
             <p className="text-xs text-slate-500 mt-2">Real-time updates</p>
@@ -447,7 +510,7 @@ export const CandidateDashboard = () => {
               <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
                 <TrendingUp className="w-6 h-6 text-green-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">2nd</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.currentPosition > 0 ? `${stats.currentPosition}${stats.currentPosition === 1 ? 'st' : stats.currentPosition === 2 ? 'nd' : stats.currentPosition === 3 ? 'rd' : 'th'}` : 'N/A'}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Current Position</h3>
             <p className="text-xs text-slate-500 mt-2">Based on vote count</p>
@@ -458,7 +521,7 @@ export const CandidateDashboard = () => {
               <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
                 <Users className="w-6 h-6 text-amber-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">67%</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.voterEngagement}%</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Voter Engagement</h3>
             <p className="text-xs text-slate-500 mt-2">Real-time metrics</p>
@@ -583,7 +646,16 @@ export const CandidateDashboard = () => {
                                 Apply
                               </button>
                             )}
-                            {myCandidate && (
+                            {myCandidate && myCandidate.status === 'approved' && election.status === 'active' && (
+                              <button
+                                onClick={() => handleViewScoreboard(election)}
+                                className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors flex items-center gap-2"
+                              >
+                                <TrendingUp className="w-4 h-4" />
+                                View Scoreboard
+                              </button>
+                            )}
+                            {myCandidate && !(myCandidate.status === 'approved' && election.status === 'active') && (
                               <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-lg text-sm font-medium">
                                 Applied
                               </span>
@@ -643,7 +715,16 @@ export const CandidateDashboard = () => {
                             )}
                           </div>
                           <div className="ml-4">
-                            {candidate.status === 'approved' && (
+                            {candidate.status === 'approved' && election && election.status === 'active' && (
+                              <button
+                                onClick={() => handleViewScoreboard(election)}
+                                className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors flex items-center gap-2"
+                              >
+                                <TrendingUp className="w-4 h-4" />
+                                View Scoreboard
+                              </button>
+                            )}
+                            {candidate.status === 'approved' && election && election.status !== 'active' && (
                               <div className="flex items-center gap-2 text-green-600">
                                 <CheckCircle className="w-4 h-4" />
                                 <span className="text-sm font-medium">Approved</span>
@@ -1263,6 +1344,131 @@ export const CandidateDashboard = () => {
                   <span>Trusted by institutions</span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Scoreboard Modal */}
+      {showScoreboardModal && scoreboardElection && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-slate-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900">Live Scoreboard</h3>
+                  <p className="text-slate-600 mt-1">{scoreboardElection.title}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    // Clean up subscription when closing
+                    if (scoreboardUnsubscribe) {
+                      scoreboardUnsubscribe();
+                      setScoreboardUnsubscribe(null);
+                    }
+                    setShowScoreboardModal(false);
+                  }}
+                  className="text-slate-400 hover:text-slate-600 text-2xl"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              {scoreboardLoading ? (
+                <div className="text-center py-8">
+                  <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                  <p className="text-slate-600">Loading vote counts...</p>
+                </div>
+              ) : scoreboardCandidates.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-slate-600">No candidates available yet</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-medium text-blue-900 mb-2">Real-time Vote Tracking</h4>
+                        <p className="text-sm text-blue-800">
+                          Vote counts update automatically as voters cast their ballots. Rankings are based on total votes received.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 text-green-600">
+                        <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
+                        <span className="text-sm font-medium">LIVE</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {scoreboardCandidates.map((candidate, index) => {
+                    const isCurrentUser = candidate.user_id === user?.id;
+                    const totalVotes = scoreboardCandidates.reduce((sum, c) => sum + (c.vote_count || 0), 0);
+                    const votePercentage = totalVotes > 0 ? Math.round(((candidate.vote_count || 0) / totalVotes) * 100) : 0;
+                    
+                    return (
+                      <div
+                        key={candidate.id}
+                        className={`p-4 border rounded-xl transition-all ${
+                          isCurrentUser
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-slate-200 hover:border-blue-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className={`flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg ${
+                            index === 0 ? 'bg-yellow-100 text-yellow-700' :
+                            index === 1 ? 'bg-gray-200 text-gray-700' :
+                            index === 2 ? 'bg-orange-100 text-orange-700' :
+                            'bg-slate-100 text-slate-700'
+                          }`}>
+                            #{index + 1}
+                          </div>
+                          
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <h5 className="font-medium text-slate-900">{candidate.name}</h5>
+                              {isCurrentUser && (
+                                <span className="px-2 py-0.5 bg-blue-600 text-white text-xs rounded-full">YOU</span>
+                              )}
+                            </div>
+                            <p className="text-sm text-slate-600">{candidate.position}</p>
+                            
+                            {/* Vote progress bar */}
+                            <div className="mt-2">
+                              <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+                                <span>{candidate.vote_count || 0} votes</span>
+                                <span>{votePercentage}%</span>
+                              </div>
+                              <div className="w-full bg-slate-200 rounded-full h-2">
+                                <div
+                                  className={`h-2 rounded-full transition-all ${
+                                    index === 0 ? 'bg-yellow-500' :
+                                    index === 1 ? 'bg-gray-400' :
+                                    index === 2 ? 'bg-orange-500' :
+                                    'bg-blue-500'
+                                  }`}
+                                  style={{ width: `${votePercentage}%` }}
+                                ></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div className="mt-6 p-4 bg-slate-50 rounded-lg">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-600">Total Votes Cast:</span>
+                      <span className="font-bold text-slate-900">
+                        {scoreboardCandidates.reduce((sum, c) => sum + (c.vote_count || 0), 0)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

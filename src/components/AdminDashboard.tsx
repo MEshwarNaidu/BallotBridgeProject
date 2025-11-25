@@ -1,7 +1,7 @@
 import { useAuth } from '../contexts/AuthContext';
-import { LayoutGrid, Users, Vote, BarChart3, Settings, LogOut, Plus, CheckCircle, XCircle, AlertCircle, Upload, FileText, UserPlus, UserCheck, Info } from 'lucide-react';
+import { LayoutGrid, Users, Vote, BarChart3, Settings, LogOut, Plus, CheckCircle, XCircle, AlertCircle, FileText, UserPlus, Info, RefreshCw } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { electionsService, candidatesService, votesService, usersService, voterManagementService, electionStatsService, realtimeService, electionStatusService } from '../lib/firebaseServices';
+import { electionsService, candidatesService, votesService, usersService, electionStatsService, realtimeService, electionStatusService } from '../lib/firebaseServices';
 import { Election, Candidate, User, ElectionStats } from '../lib/firebase';
 import { ElectionDetailsDashboard } from './ElectionDetailsDashboard';
 import { VoterCandidateListManager } from './VoterCandidateListManager';
@@ -45,6 +45,8 @@ export const AdminDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   useEffect(() => {
     // Update election statuses first
@@ -59,21 +61,36 @@ export const AdminDashboard = () => {
     updateStatuses();
 
     // Set up real-time listeners
-    const unsubscribeElections = realtimeService.subscribeToElections((electionsData) => {
-      setElections(electionsData);
+    const unsubscribeElections = realtimeService.subscribeToElections(async (electionsData) => {
+      // Update election statuses first
+      try {
+        await electionStatusService.updateAllElectionStatuses();
+      } catch (error) {
+        console.warn('Failed to update election statuses in real-time:', error);
+      }
       
-      // Calculate stats based on current date
-      const now = new Date();
-      const activeElections = electionsData.filter(e => {
-        const startDate = new Date(e.start_date);
-        const endDate = new Date(e.end_date);
-        return startDate <= now && endDate >= now;
-      }).length;
+      // Re-fetch elections with updated statuses
+      const updatedElections = await electionsService.getAllElections();
+      setElections(updatedElections);
+      
+      // Calculate stats based on status field (not date calculations)
+      const activeElections = updatedElections.filter(e => e.status === 'active').length;
 
-      setStats(prev => ({
-        ...prev,
-        activeElections
-      }));
+      // Calculate total votes from all candidates using candidatesService
+      try {
+        const allCandidates = await candidatesService.getCandidatesByElection('');
+        const totalVotes = allCandidates.reduce((sum: number, candidate: Candidate) => {
+          return sum + (candidate.vote_count || 0);
+        }, 0);
+
+        setStats(prev => ({
+          ...prev,
+          activeElections,
+          totalVotes
+        }));
+      } catch (error) {
+        console.error('Error calculating total votes:', error);
+      }
     });
 
     const unsubscribeCandidates = realtimeService.subscribeToCandidates((candidatesData) => {
@@ -93,28 +110,12 @@ export const AdminDashboard = () => {
       const totalVoters = usersData.filter(u => u.role === 'voter').length;
       setStats(prev => ({
         ...prev,
-        voterTurnout: totalVoters > 0 ? Math.round((prev.totalVotes / totalVoters) * 100) : 0
+        voterTurnout: totalVoters > 0 && prev.totalVotes > 0 ? Math.round((prev.totalVotes / totalVoters) * 100) : 0
       }));
+      
+      setLastRefresh(new Date());
     });
 
-    // Calculate total votes
-    const calculateTotalVotes = async () => {
-      try {
-        let totalVotes = 0;
-        for (const election of elections) {
-          const votes = await votesService.getVotesByElection(election.id);
-          totalVotes += votes.length;
-        }
-        setStats(prev => ({
-          ...prev,
-          totalVotes
-        }));
-      } catch (error) {
-        console.error('Error calculating total votes:', error);
-      }
-    };
-
-    calculateTotalVotes();
     setLoading(false);
 
     // Cleanup listeners on unmount
@@ -123,61 +124,20 @@ export const AdminDashboard = () => {
       unsubscribeCandidates();
       unsubscribeUsers();
     };
-  }, [elections]);
+  }, []);
 
-  // Countdown timer effect for upcoming elections
-  useEffect(() => {
-    const updateCountdowns = () => {
-      const now = new Date();
-      const newCountdowns: {[key: string]: string} = {};
-
-      elections.forEach(election => {
-        const startDate = new Date(election.start_date);
-        const endDate = new Date(election.end_date);
-        const timeDiff = startDate.getTime() - now.getTime();
-
-        if (timeDiff > 0) {
-          // Election is upcoming
-          const days = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
-          const hours = Math.floor((timeDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
-          const seconds = Math.floor((timeDiff % (1000 * 60)) / 1000);
-
-          if (days > 0) {
-            newCountdowns[election.id] = `${days}d ${hours}h ${minutes}m`;
-          } else if (hours > 0) {
-            newCountdowns[election.id] = `${hours}h ${minutes}m ${seconds}s`;
-          } else {
-            newCountdowns[election.id] = `${minutes}m ${seconds}s`;
-          }
-        } else if (startDate <= now && endDate >= now) {
-          // Election is active
-          const endTimeDiff = endDate.getTime() - now.getTime();
-          const endDays = Math.floor(endTimeDiff / (1000 * 60 * 60 * 24));
-          const endHours = Math.floor((endTimeDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const endMinutes = Math.floor((endTimeDiff % (1000 * 60 * 60)) / (1000 * 60));
-          
-          if (endDays > 0) {
-            newCountdowns[election.id] = `Active - ${endDays}d ${endHours}h left`;
-          } else if (endHours > 0) {
-            newCountdowns[election.id] = `Active - ${endHours}h ${endMinutes}m left`;
-          } else {
-            newCountdowns[election.id] = `Active - ${endMinutes}m left`;
-          }
-        } else {
-          // Election is completed
-          newCountdowns[election.id] = 'Completed';
-        }
-      });
-
-      setCountdowns(newCountdowns);
-    };
-
-    updateCountdowns();
-    const interval = setInterval(updateCountdowns, 1000);
-
-    return () => clearInterval(interval);
-  }, [elections]);
+  const getFilteredElections = () => {
+    switch (activeTab) {
+      case 'upcoming':
+        return elections.filter(e => e.status === 'upcoming');
+      case 'active':
+        return elections.filter(e => e.status === 'active');
+      case 'completed':
+        return elections.filter(e => e.status === 'completed');
+      default:
+        return elections;
+    }
+  };
 
   const handleApproveCandidate = async (candidateId: string) => {
     try {
@@ -314,27 +274,52 @@ export const AdminDashboard = () => {
     }
   };
 
-  const getElectionStatus = (election: Election) => {
-    const now = new Date();
-    const startDate = new Date(election.start_date);
-    const endDate = new Date(election.end_date);
-    
-    if (startDate > now) return 'upcoming';
-    if (startDate <= now && endDate >= now) return 'active';
-    return 'completed';
-  };
-
-  const getFilteredElections = () => {
-    const now = new Date();
-    switch (activeTab) {
-      case 'upcoming':
-        return elections.filter(e => getElectionStatus(e) === 'upcoming');
-      case 'active':
-        return elections.filter(e => getElectionStatus(e) === 'active');
-      case 'completed':
-        return elections.filter(e => getElectionStatus(e) === 'completed');
-      default:
-        return elections;
+  // Manual refresh function
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      console.log('Admin refresh triggered - updating election statuses...');
+      
+      // Force update all election statuses
+      await electionStatusService.updateAllElectionStatuses();
+      
+      // Re-fetch all data
+      const [electionsData, candidatesData, usersData] = await Promise.all([
+        electionsService.getAllElections(),
+        candidatesService.getCandidatesByElection(''),
+        usersService.getAllUsers()
+      ]);
+      
+      console.log('Admin refresh data:', {
+        elections: electionsData.length,
+        candidates: candidatesData.length,
+        users: usersData.length,
+        electionStatuses: electionsData.map(e => ({ id: e.id, title: e.title, status: e.status }))
+      });
+      
+      setElections(electionsData);
+      setPendingCandidates(candidatesData.filter(c => c.status === 'pending'));
+      setAllUsers(usersData);
+      
+      // Recalculate stats
+      const activeElections = electionsData.filter(e => e.status === 'active').length;
+      const totalVotes = candidatesData.reduce((sum, c) => sum + (c.vote_count || 0), 0);
+      const totalVoters = usersData.filter(u => u.role === 'voter').length;
+      
+      setStats({
+        activeElections,
+        totalCandidates: candidatesData.length,
+        totalVotes,
+        voterTurnout: totalVoters > 0 && totalVotes > 0 ? Math.round((totalVotes / totalVoters) * 100) : 0
+      });
+      
+      setLastRefresh(new Date());
+      console.log('Admin refresh completed successfully');
+    } catch (error) {
+      console.error('Error during admin refresh:', error);
+      setError('Failed to refresh data. Please try again.');
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -388,8 +373,25 @@ export const AdminDashboard = () => {
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-slate-900 mb-2">Welcome back, Admin</h2>
-          <p className="text-slate-600">Manage elections, candidates, and voters from your control center</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-3xl font-bold text-slate-900 mb-2">Welcome back, Admin</h2>
+              <p className="text-slate-600">Manage elections, candidates, and voters from your control center</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="text-right text-sm text-slate-500">
+                <p>Last updated: {lastRefresh.toLocaleTimeString()}</p>
+              </div>
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -398,7 +400,7 @@ export const AdminDashboard = () => {
               <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
                 <LayoutGrid className="w-6 h-6 text-blue-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">3</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.activeElections}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Active Elections</h3>
           </div>
@@ -408,7 +410,7 @@ export const AdminDashboard = () => {
               <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
                 <Users className="w-6 h-6 text-green-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">45</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.totalCandidates}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Total Candidates</h3>
           </div>
@@ -418,7 +420,7 @@ export const AdminDashboard = () => {
               <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
                 <Vote className="w-6 h-6 text-amber-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">1,234</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.totalVotes}</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Total Votes Cast</h3>
           </div>
@@ -428,7 +430,7 @@ export const AdminDashboard = () => {
               <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center">
                 <BarChart3 className="w-6 h-6 text-purple-600" />
               </div>
-              <span className="text-2xl font-bold text-slate-900">89%</span>
+              <span className="text-2xl font-bold text-slate-900">{stats.voterTurnout}%</span>
             </div>
             <h3 className="text-sm font-medium text-slate-600">Voter Turnout</h3>
           </div>
@@ -467,7 +469,7 @@ export const AdminDashboard = () => {
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Upcoming ({elections.filter(e => new Date(e.start_date) > new Date()).length})
+                Upcoming ({elections.filter(e => e.status === 'upcoming').length})
               </button>
               <button
                 onClick={() => setActiveTab('active')}
@@ -477,12 +479,7 @@ export const AdminDashboard = () => {
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Active ({elections.filter(e => {
-                  const startDate = new Date(e.start_date);
-                  const endDate = new Date(e.end_date);
-                  const now = new Date();
-                  return startDate <= now && endDate >= now;
-                }).length})
+                Active ({elections.filter(e => e.status === 'active').length})
               </button>
               <button
                 onClick={() => setActiveTab('completed')}
@@ -492,7 +489,7 @@ export const AdminDashboard = () => {
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Completed ({elections.filter(e => new Date(e.end_date) < new Date()).length})
+                Completed ({elections.filter(e => e.status === 'completed').length})
               </button>
             </div>
 
@@ -508,10 +505,21 @@ export const AdminDashboard = () => {
                 </div>
               ) : (
                 getFilteredElections().map((election) => {
+                  const startDate = new Date(election.start_date);
                   const endDate = new Date(election.end_date);
                   const now = new Date();
-                  const timeLeft = endDate.getTime() - now.getTime();
-                  const daysLeft = Math.ceil(timeLeft / (1000 * 60 * 60 * 24));
+                  
+                  // Calculate time display based on status
+                  let timeDisplay = '';
+                  if (election.status === 'upcoming') {
+                    const daysUntilStart = Math.ceil((startDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                    timeDisplay = daysUntilStart > 0 ? `Starts in ${daysUntilStart} day${daysUntilStart !== 1 ? 's' : ''}` : 'Starting soon';
+                  } else if (election.status === 'active') {
+                    const daysLeft = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                    timeDisplay = daysLeft > 0 ? `${daysLeft} day${daysLeft !== 1 ? 's' : ''} remaining` : 'Ending soon';
+                  } else if (election.status === 'completed') {
+                    timeDisplay = `Ended ${endDate.toLocaleDateString()}`;
+                  }
                   
                   return (
                     <div
@@ -524,18 +532,20 @@ export const AdminDashboard = () => {
                           <div className="flex items-center gap-3 text-sm text-slate-600">
                             <span
                               className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                getElectionStatus(election) === 'active'
+                                election.status === 'active'
                                   ? 'bg-green-100 text-green-700'
-                                  : getElectionStatus(election) === 'upcoming'
+                                  : election.status === 'upcoming'
                                   ? 'bg-blue-100 text-blue-700'
                                   : 'bg-gray-100 text-gray-700'
                               }`}
                             >
-                              {getElectionStatus(election)}
+                              {election.status}
                             </span>
-                            <span className="text-blue-600 font-medium">
-                              {countdowns[election.id] || 'Loading...'}
-                            </span>
+                            {timeDisplay && (
+                              <span className="text-slate-600 font-medium">
+                                {timeDisplay}
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div className="flex gap-2">

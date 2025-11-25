@@ -8,13 +8,13 @@ import { getStorage } from "firebase/storage";
 // Your web app's Firebase configuration
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
-  apiKey: "AIzaSyDucAk3y9t2OzDNdwSuZSSsnB_tqutGQkQ",
-  authDomain: "ballotbridge-7f5b9.firebaseapp.com",
-  projectId: "ballotbridge-7f5b9",
-  storageBucket: "ballotbridge-7f5b9.firebasestorage.app",
-  messagingSenderId: "494785593595",
-  appId: "1:494785593595:web:a6d5d5c3cc733ea002305e",
-  measurementId: "G-6RSMJQ708T"
+  apiKey: "AIzaSyDkrwV5pcv6CsmEwi0HwpAmu8hJuJHhEq4",
+  authDomain: "ballotbridge-37980.firebaseapp.com",
+  projectId: "ballotbridge-37980",
+  storageBucket: "ballotbridge-37980.firebasestorage.app",
+  messagingSenderId: "957723522516",
+  appId: "1:957723522516:web:7dcc15d09335f7e43d5241",
+  measurementId: "G-DW7YFCJBY3"
 };
 
 // Initialize Firebase
@@ -67,6 +67,8 @@ export interface User {
   full_name: string | null;
   created_at: string;
   updated_at: string;
+  has_voted_for?: { [electionId: string]: boolean };
+  voted_candidate_for?: { [electionId: string]: string };
 }
 
 export interface Election {
@@ -80,8 +82,8 @@ export interface Election {
   positions: string[];
   maxCandidates?: number;
   maxVoters?: number;
-  voterList?: string[]; // Array of user IDs who can vote
-  candidateList?: string[]; // Array of user IDs who can be candidates
+  allowed_voters?: string[]; // Array of user IDs who can vote
+  candidates?: string[]; // Array of candidate IDs (references to Candidate documents)
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -101,6 +103,7 @@ export interface Candidate {
   documentsURL?: string[];
   status: 'pending' | 'approved' | 'rejected';
   rejection_reason?: string;
+  vote_count: number;
   created_at: string;
   updated_at: string;
 }

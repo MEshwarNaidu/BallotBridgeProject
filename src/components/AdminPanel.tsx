@@ -5,7 +5,6 @@ import { Shield, Users, Vote, Settings, LogOut, CheckCircle } from 'lucide-react
 
 export const AdminPanel = () => {
   const { user, signOut } = useAuth();
-  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [stats, setStats] = useState({
     totalUsers: 0,
