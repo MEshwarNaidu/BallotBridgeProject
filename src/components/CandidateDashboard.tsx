@@ -52,11 +52,10 @@ export const CandidateDashboard = () => {
     const now = new Date();
     const available = electionsData.filter(e => {
       const startDate = new Date(e.start_date);
-      const endDate = new Date(e.end_date);
-      // Show all elections that are not completed and user hasn't applied to
-      const isNotCompleted = endDate >= now;
+      // Show only upcoming elections that user hasn't applied to
+      const isUpcoming = startDate > now;
       const hasNotApplied = !candidatesData.some(c => c.election_id === e.id);
-      return isNotCompleted && hasNotApplied;
+      return isUpcoming && hasNotApplied;
     });
     console.log('Available elections updated:', available.length, 'elections');
     setAvailableElections(available);
@@ -554,7 +553,7 @@ export const CandidateDashboard = () => {
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Upcoming ({elections.filter(e => new Date(e.start_date) > new Date()).length})
+                  Upcoming ({elections.filter(e => getElectionStatus(e) === 'upcoming').length})
                 </button>
                 <button
                   onClick={() => setActiveTab('active')}
@@ -564,12 +563,7 @@ export const CandidateDashboard = () => {
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Active ({elections.filter(e => {
-                    const startDate = new Date(e.start_date);
-                    const endDate = new Date(e.end_date);
-                    const now = new Date();
-                    return startDate <= now && endDate >= now;
-                  }).length})
+                  Active ({elections.filter(e => getElectionStatus(e) === 'active').length})
                 </button>
                 <button
                   onClick={() => setActiveTab('completed')}
@@ -579,7 +573,7 @@ export const CandidateDashboard = () => {
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  Completed ({elections.filter(e => new Date(e.end_date) < new Date()).length})
+                  Completed ({elections.filter(e => getElectionStatus(e) === 'completed').length})
                 </button>
               </div>
 

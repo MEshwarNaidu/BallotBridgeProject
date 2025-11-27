@@ -147,6 +147,7 @@ export const VoterDashboard = () => {
       // Filter elections for this voter
       const hasVotedFor = user.has_voted_for || {};
       
+      // Show active elections where user is allowed to vote and hasn't voted yet
       const userActiveElections = allElections.filter(e => {
         const allowedVoters = e.allowed_voters || [];
         const hasVoted = hasVotedFor[e.id] === true;
@@ -185,7 +186,7 @@ export const VoterDashboard = () => {
       setStats({
         availableElections: userActiveElections.length,
         votesCast: votedCount,
-        pendingVotes: userActiveElections.length
+        pendingVotes: userActiveElections.length > 0 ? userActiveElections.length - votedCount : 0
       });
       
       setLastRefresh(new Date());
@@ -489,6 +490,11 @@ export const VoterDashboard = () => {
                             >
                               Vote Now
                             </button>
+                          )}
+                          {hasVoted && (
+                            <span className="px-4 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium">
+                              Voted
+                            </span>
                           )}
                         </div>
                         <div className="flex items-center justify-between text-xs text-slate-500 pt-3 border-t border-slate-100">

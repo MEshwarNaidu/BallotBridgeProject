@@ -295,10 +295,17 @@ export const candidatesService = {
     }
   },
 
-  // Update candidate status
+  // Update candidate status and automatically add to election when approved
   async updateCandidateStatus(id: string, status: 'pending' | 'approved' | 'rejected', rejectionReason?: string): Promise<void> {
     try {
       const candidateRef = doc(db, 'candidates', id);
+      const candidateDoc = await getDoc(candidateRef);
+      
+      if (!candidateDoc.exists()) {
+        throw new Error('Candidate not found');
+      }
+      
+      const candidateData: any = candidateDoc.data();
       const updateData: any = {
         status,
         updated_at: serverTimestamp(),
@@ -309,6 +316,31 @@ export const candidatesService = {
       }
       
       await updateDoc(candidateRef, updateData);
+      
+      // If candidate is approved, automatically add them to the election's candidate list
+      if (status === 'approved') {
+        try {
+          const electionRef = doc(db, 'elections', candidateData.election_id);
+          const electionDoc = await getDoc(electionRef);
+          
+          if (electionDoc.exists()) {
+            const electionData: any = electionDoc.data();
+            const currentCandidateList = electionData.candidates || [];
+            
+            // Add candidate ID to election's candidate list if not already present
+            if (!currentCandidateList.includes(candidateData.user_id)) {
+              await updateDoc(electionRef, {
+                candidates: [...currentCandidateList, candidateData.user_id],
+                updated_at: serverTimestamp()
+              });
+              console.log(`Candidate ${candidateData.user_id} added to election ${candidateData.election_id}`);
+            }
+          }
+        } catch (electionError) {
+          console.warn('Failed to add candidate to election list:', electionError);
+          // Don't throw error here as the candidate status update was successful
+        }
+      }
     } catch (error) {
       console.error('Error updating candidate status:', error);
       throw error;
