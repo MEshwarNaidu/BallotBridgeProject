@@ -47,6 +47,7 @@ export const AdminDashboard = () => {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [electionStatsUnsubscribe, setElectionStatsUnsubscribe] = useState<(() => void) | null>(null);
 
   useEffect(() => {
     // Update election statuses first
@@ -123,8 +124,20 @@ export const AdminDashboard = () => {
       unsubscribeElections();
       unsubscribeCandidates();
       unsubscribeUsers();
+      // Clean up election stats subscription if it exists
+      if (electionStatsUnsubscribe) {
+        electionStatsUnsubscribe();
+      }
     };
-  }, []);
+  }, [electionStatsUnsubscribe]);
+  
+  // Clean up election stats subscription when modal is closed
+  useEffect(() => {
+    if (!showElectionDetailsModal && electionStatsUnsubscribe) {
+      electionStatsUnsubscribe();
+      setElectionStatsUnsubscribe(null);
+    }
+  }, [showElectionDetailsModal, electionStatsUnsubscribe]);
 
   const getFilteredElections = () => {
     switch (activeTab) {
@@ -239,11 +252,26 @@ export const AdminDashboard = () => {
 
   const openElectionDetails = async (election: Election) => {
     try {
+      // Clean up any existing subscription
+      if (electionStatsUnsubscribe) {
+        electionStatsUnsubscribe();
+        setElectionStatsUnsubscribe(null);
+      }
+      
       // Fetch election stats when opening election details
       const stats = await electionStatsService.getElectionStats(election.id);
       setElectionStats(stats);
       setSelectedElection(election);
       setShowElectionDetailsModal(true);
+      
+      // Set up real-time listener for election stats
+      const unsubscribe = electionStatsService.subscribeToElectionStats(election.id, (updatedStats) => {
+        console.log('Real-time stats update received in Admin Dashboard:', updatedStats);
+        setElectionStats(updatedStats);
+      });
+      
+      // Store the unsubscribe function so we can clean it up later
+      setElectionStatsUnsubscribe(() => unsubscribe);
     } catch (error) {
       console.error('Error fetching election stats:', error);
       setError('Failed to load election details');

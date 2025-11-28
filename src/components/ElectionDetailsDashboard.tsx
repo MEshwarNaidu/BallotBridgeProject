@@ -1,7 +1,7 @@
 import { useAuth } from '../contexts/AuthContext';
 import { ArrowLeft, Users, Vote, Calendar, CheckCircle, AlertCircle, User as UserIcon, Phone, FileText, Clock } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { candidatesService, electionStatsService, electionListService } from '../lib/firebaseServices';
+import { candidatesService, electionStatsService } from '../lib/firebaseServices';
 import { Election, Candidate, ElectionStats, User } from '../lib/firebase';
 
 interface ElectionDetailsDashboardProps {
@@ -30,39 +30,18 @@ export const ElectionDetailsDashboard = ({ election, onBack }: ElectionDetailsDa
         console.log('Candidates loaded:', electionCandidates.length);
         setCandidates(electionCandidates);
 
-        // Fetch voter list for this election
-        let voters: User[] = [];
-        try {
-          voters = await electionListService.getElectionVoterList(election.id);
-          console.log('Voter list loaded:', voters.length);
-          setVoterList(voters);
-        } catch (voterError) {
-          console.warn('Failed to load voter list:', voterError);
-          setVoterList([]);
-        }
-
         // Fetch election statistics
         try {
           const electionStats = await electionStatsService.getElectionStats(election.id);
           console.log('Election stats loaded:', electionStats);
-          
-          // Calculate pending votes based on voter list
-          const totalEligibleVoters = voters.length > 0 ? voters.length : (election.maxVoters || 0);
-          const pendingVotes = Math.max(0, totalEligibleVoters - electionStats.totalVotes);
-          
-          setStats({
-            ...electionStats,
-            totalVoters: totalEligibleVoters,
-            pendingVotes
-          });
+          setStats(electionStats);
         } catch (statsError) {
           console.warn('Failed to load election stats, using default:', statsError);
           // Set default stats if service fails
-          const totalEligibleVoters = voters.length > 0 ? voters.length : (election.maxVoters || 0);
           setStats({
-            totalVoters: totalEligibleVoters,
+            totalVoters: 0,
             totalVotes: 0,
-            pendingVotes: totalEligibleVoters,
+            pendingVotes: 0,
             candidateResults: []
           });
         }
@@ -76,6 +55,17 @@ export const ElectionDetailsDashboard = ({ election, onBack }: ElectionDetailsDa
     };
 
     fetchElectionData();
+
+    // Set up real-time listener for election stats
+    const unsubscribe = electionStatsService.subscribeToElectionStats(election.id, (updatedStats) => {
+      console.log('Real-time stats update received:', updatedStats);
+      setStats(updatedStats);
+    });
+
+    // Cleanup subscription on unmount
+    return () => {
+      unsubscribe();
+    };
   }, [election.id]);
 
   const getStatusColor = (status: string) => {
@@ -92,13 +82,8 @@ export const ElectionDetailsDashboard = ({ election, onBack }: ElectionDetailsDa
   };
 
   const getElectionStatus = () => {
-    const now = new Date();
-    const startDate = new Date(election.start_date);
-    const endDate = new Date(election.end_date);
-    
-    if (startDate > now) return 'upcoming';
-    if (startDate <= now && endDate >= now) return 'active';
-    return 'completed';
+    // Use the status field directly instead of calculating based on dates
+    return election.status;
   };
 
   if (loading) {
@@ -200,16 +185,6 @@ export const ElectionDetailsDashboard = ({ election, onBack }: ElectionDetailsDa
               <div className="flex items-center justify-between mb-4">
                 <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center">
                   <Clock className="w-6 h-6 text-orange-600" />
-                </div>
-                <span className="text-2xl font-bold text-slate-900">{stats.pendingVotes}</span>
-              </div>
-              <h3 className="text-sm font-medium text-slate-600">Pending Votes</h3>
-            </div>
-
-            <div className="bg-white rounded-2xl p-6 border border-slate-200">
-              <div className="flex items-center justify-between mb-4">
-                <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
-                  <AlertCircle className="w-6 h-6 text-amber-600" />
                 </div>
                 <span className="text-2xl font-bold text-slate-900">{stats.pendingVotes}</span>
               </div>

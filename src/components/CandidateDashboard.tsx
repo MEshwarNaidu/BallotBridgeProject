@@ -371,13 +371,8 @@ export const CandidateDashboard = () => {
   };
 
   const getElectionStatus = (election: Election) => {
-    const now = new Date();
-    const startDate = new Date(election.start_date);
-    const endDate = new Date(election.end_date);
-    
-    if (startDate > now) return 'upcoming';
-    if (startDate <= now && endDate >= now) return 'active';
-    return 'completed';
+    // Use the status field directly instead of calculating based on dates
+    return election.status;
   };
 
   const getFilteredElections = () => {
