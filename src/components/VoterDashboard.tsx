@@ -406,7 +406,7 @@ export const VoterDashboard = () => {
               <div className="bg-white rounded-2xl p-6 border border-slate-200">
                 <h3 className="text-lg font-bold text-slate-900 mb-6">Upcoming Elections</h3>
                 <div className="space-y-4">
-                  {upcomingElections && upcomingElections.length > 0 ? upcomingElections.map((election) => {
+                  {upcomingElections.map((election) => {
                     const startDate = new Date(election.start_date);
                     const endDate = new Date(election.end_date);
                     const now = new Date();
@@ -440,7 +440,7 @@ export const VoterDashboard = () => {
                         </div>
                       </div>
                     );
-                  }) : null}
+                  })}
                 </div>
               </div>
             )}

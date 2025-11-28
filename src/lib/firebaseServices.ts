@@ -748,10 +748,11 @@ export const electionStatsService = {
 
   // Subscribe to real-time election statistics
   subscribeToElectionStats(electionId: string, callback: (stats: ElectionStats) => void): Unsubscribe {
-    const votersRef = collection(db, 'elections', electionId, 'voters');
     const votesRef = collection(db, 'votes');
+    const candidatesRef = collection(db, 'candidates');
     
-    return onSnapshot(votersRef, async () => {
+    // Listen to votes and candidates changes for real-time updates
+    const unsubscribeVotes = onSnapshot(votesRef, async () => {
       try {
         const stats = await this.getElectionStats(electionId);
         callback(stats);
@@ -759,6 +760,21 @@ export const electionStatsService = {
         console.error('Error in real-time stats subscription:', error);
       }
     });
+    
+    const unsubscribeCandidates = onSnapshot(candidatesRef, async () => {
+      try {
+        const stats = await this.getElectionStats(electionId);
+        callback(stats);
+      } catch (error) {
+        console.error('Error in real-time stats subscription:', error);
+      }
+    });
+    
+    // Return a function that unsubscribes from both listeners
+    return () => {
+      unsubscribeVotes();
+      unsubscribeCandidates();
+    };
   }
 };
 
