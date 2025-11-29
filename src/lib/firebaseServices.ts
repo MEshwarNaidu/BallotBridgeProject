@@ -29,17 +29,23 @@ export const electionsService = {
       
       return await withRetry(async () => {
         const electionsRef = collection(db, 'elections');
-        const q = query(electionsRef, orderBy('created_at', 'desc'));
+        const q = query(electionsRef);
         const querySnapshot = await getDocs(q);
         
-        return querySnapshot.docs.map(doc => ({
+        // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+        const elections = querySnapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data(),
           created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
           updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
           start_date: doc.data().start_date?.toDate?.()?.toISOString() || new Date().toISOString(),
           end_date: doc.data().end_date?.toDate?.()?.toISOString() || new Date().toISOString(),
-        })) as Election[];
+        }));
+        
+        // Sort by created_at descending in memory
+        return elections.sort((a, b) => 
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        ) as Election[];
       });
     } catch (error) {
       console.error('Error fetching elections:', error);
@@ -51,17 +57,23 @@ export const electionsService = {
   async getActiveElections(): Promise<Election[]> {
     try {
       const electionsRef = collection(db, 'elections');
-      const q = query(electionsRef, where('status', '==', 'active'), orderBy('created_at', 'desc'));
+      const q = query(electionsRef, where('status', '==', 'active'));
       const querySnapshot = await getDocs(q);
       
-      return querySnapshot.docs.map(doc => ({
+      // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+      const elections = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         start_date: doc.data().start_date?.toDate?.()?.toISOString() || new Date().toISOString(),
         end_date: doc.data().end_date?.toDate?.()?.toISOString() || new Date().toISOString(),
-      })) as Election[];
+      }));
+      
+      // Sort by created_at descending in memory
+      return elections.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ) as Election[];
     } catch (error) {
       console.error('Error fetching active elections:', error);
       throw error;
@@ -142,19 +154,24 @@ export const electionsService = {
       const electionsRef = collection(db, 'elections');
       const q = query(
         electionsRef, 
-        where('start_date', '>', Timestamp.fromDate(now)),
-        orderBy('start_date', 'asc')
+        where('start_date', '>', Timestamp.fromDate(now))
       );
       const querySnapshot = await getDocs(q);
       
-      return querySnapshot.docs.map(doc => ({
+      // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+      const elections = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         start_date: doc.data().start_date?.toDate?.()?.toISOString() || new Date().toISOString(),
         end_date: doc.data().end_date?.toDate?.()?.toISOString() || new Date().toISOString(),
-      })) as Election[];
+      }));
+      
+      // Sort by start_date ascending in memory
+      return elections.sort((a, b) => 
+        new Date(a.start_date).getTime() - new Date(b.start_date).getTime()
+      ) as Election[];
     } catch (error) {
       console.error('Error fetching upcoming elections:', error);
       throw error;
@@ -165,17 +182,23 @@ export const electionsService = {
   async getElectionsByStatus(status: 'upcoming' | 'active' | 'completed' | 'cancelled'): Promise<Election[]> {
     try {
       const electionsRef = collection(db, 'elections');
-      const q = query(electionsRef, where('status', '==', status), orderBy('created_at', 'desc'));
+      const q = query(electionsRef, where('status', '==', status));
       const querySnapshot = await getDocs(q);
       
-      return querySnapshot.docs.map(doc => ({
+      // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+      const elections = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         start_date: doc.data().start_date?.toDate?.()?.toISOString() || new Date().toISOString(),
         end_date: doc.data().end_date?.toDate?.()?.toISOString() || new Date().toISOString(),
-      })) as Election[];
+      }));
+      
+      // Sort by created_at descending in memory
+      return elections.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ) as Election[];
     } catch (error) {
       console.error('Error fetching elections by status:', error);
       throw error;
@@ -241,15 +264,21 @@ export const candidatesService = {
   async getCandidatesByElection(electionId: string): Promise<Candidate[]> {
     try {
       const candidatesRef = collection(db, 'candidates');
-      const q = query(candidatesRef, where('election_id', '==', electionId), orderBy('created_at', 'desc'));
+      const q = query(candidatesRef, where('election_id', '==', electionId));
       const querySnapshot = await getDocs(q);
       
-      return querySnapshot.docs.map(doc => ({
+      // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+      const candidates = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
-      })) as Candidate[];
+      }));
+      
+      // Sort by created_at descending in memory
+      return candidates.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ) as Candidate[];
     } catch (error) {
       console.error('Error fetching candidates:', error);
       throw error;
@@ -351,15 +380,21 @@ export const candidatesService = {
   async getPendingCandidates(): Promise<Candidate[]> {
     try {
       const candidatesRef = collection(db, 'candidates');
-      const q = query(candidatesRef, where('status', '==', 'pending'), orderBy('created_at', 'desc'));
+      const q = query(candidatesRef, where('status', '==', 'pending'));
       const querySnapshot = await getDocs(q);
       
-      return querySnapshot.docs.map(doc => ({
+      // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+      const candidates = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
-      })) as Candidate[];
+      }));
+      
+      // Sort by created_at descending in memory
+      return candidates.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ) as Candidate[];
     } catch (error) {
       console.error('Error fetching pending candidates:', error);
       throw error;
@@ -457,14 +492,20 @@ export const votesService = {
   async getVotesByElection(electionId: string): Promise<Vote[]> {
     try {
       const votesRef = collection(db, 'votes');
-      const q = query(votesRef, where('election_id', '==', electionId), orderBy('created_at', 'desc'));
+      const q = query(votesRef, where('election_id', '==', electionId));
       const querySnapshot = await getDocs(q);
       
-      return querySnapshot.docs.map(doc => ({
+      // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+      const votes = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
-      })) as Vote[];
+      }));
+      
+      // Sort by created_at descending in memory
+      return votes.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ) as Vote[];
     } catch (error) {
       console.error('Error fetching votes:', error);
       throw error;
@@ -512,18 +553,29 @@ export const usersService = {
   // Get all users
   async getAllUsers(): Promise<User[]> {
     try {
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, orderBy('created_at', 'desc'));
-      const querySnapshot = await getDocs(q);
+      if (!checkNetworkStatus()) {
+        throw new Error('No internet connection');
+      }
       
-      return querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
-        updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
-      })) as User[];
+      return await withRetry(async () => {
+        const usersRef = collection(db, 'users');
+        const snapshot = await getDocs(usersRef);
+        
+        // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+        const users = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        // Sort by created_at descending in memory (assuming users have created_at field)
+        return users.sort((a: any, b: any) => {
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return dateB - dateA;
+        }) as User[];
+      });
     } catch (error) {
-      console.error('Error fetching users:', error);
+      console.error('Error getting all users:', error);
       throw error;
     }
   },
@@ -532,15 +584,21 @@ export const usersService = {
   async getUsersByRole(role: 'admin' | 'candidate' | 'voter'): Promise<User[]> {
     try {
       const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('role', '==', role), orderBy('created_at', 'desc'));
+      const q = query(usersRef, where('role', '==', role));
       const querySnapshot = await getDocs(q);
       
-      return querySnapshot.docs.map(doc => ({
+      // Sort in memory instead of using Firestore orderBy to avoid composite index requirement
+      const users = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
         updated_at: doc.data().updated_at?.toDate?.()?.toISOString() || new Date().toISOString(),
-      })) as User[];
+      }));
+      
+      // Sort by created_at descending in memory
+      return users.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ) as User[];
     } catch (error) {
       console.error('Error fetching users by role:', error);
       throw error;
@@ -752,7 +810,11 @@ export const electionStatsService = {
     const candidatesRef = collection(db, 'candidates');
     
     // Listen to votes and candidates changes for real-time updates
-    const unsubscribeVotes = onSnapshot(votesRef, async () => {
+    // Filter votes and candidates by electionId
+    const votesQuery = query(votesRef, where('election_id', '==', electionId));
+    const candidatesQuery = query(candidatesRef, where('election_id', '==', electionId));
+    
+    const unsubscribeVotes = onSnapshot(votesQuery, async () => {
       try {
         const stats = await this.getElectionStats(electionId);
         callback(stats);
@@ -761,7 +823,7 @@ export const electionStatsService = {
       }
     });
     
-    const unsubscribeCandidates = onSnapshot(candidatesRef, async () => {
+    const unsubscribeCandidates = onSnapshot(candidatesQuery, async () => {
       try {
         const stats = await this.getElectionStats(electionId);
         callback(stats);
@@ -1128,10 +1190,12 @@ export const electionStatusService = {
         const startDate = new Date(electionData.start_date);
         const endDate = new Date(electionData.end_date);
         
-        let newStatus = 'upcoming';
-        if (startDate <= now && endDate >= now) {
+        let newStatus: 'upcoming' | 'active' | 'completed' | 'cancelled' = 'upcoming';
+        if (now < startDate) {
+          newStatus = 'upcoming';
+        } else if (now >= startDate && now <= endDate) {
           newStatus = 'active';
-        } else if (endDate < now) {
+        } else if (now > endDate) {
           newStatus = 'completed';
         }
         
@@ -1169,8 +1233,10 @@ export const electionStatusService = {
           // Upcoming: now < startTime
           // Active: startTime ≤ now ≤ endTime
           // Completed: now > endTime
-          let newStatus = 'upcoming';
-          if (startDate <= now && endDate >= now) {
+          let newStatus: 'upcoming' | 'active' | 'completed' | 'cancelled' = 'upcoming';
+          if (now < startDate) {
+            newStatus = 'upcoming';
+          } else if (now >= startDate && now <= endDate) {
             newStatus = 'active';
           } else if (now > endDate) {
             newStatus = 'completed';

@@ -49,11 +49,9 @@ export const CandidateDashboard = () => {
   const [scoreboardUnsubscribe, setScoreboardUnsubscribe] = useState<(() => void) | null>(null);
 
   const updateAvailableElections = (electionsData: Election[], candidatesData: Candidate[]) => {
-    const now = new Date();
+    // Show only upcoming elections that user hasn't applied to
     const available = electionsData.filter(e => {
-      const startDate = new Date(e.start_date);
-      // Show only upcoming elections that user hasn't applied to
-      const isUpcoming = startDate > now;
+      const isUpcoming = e.status === 'upcoming';
       const hasNotApplied = !candidatesData.some(c => c.election_id === e.id);
       return isUpcoming && hasNotApplied;
     });
@@ -790,10 +788,7 @@ export const CandidateDashboard = () => {
           </div>
 
           {/* Completed Elections */}
-          {elections.filter(e => {
-            const endDate = new Date(e.end_date);
-            return endDate < new Date();
-          }).length > 0 && (
+          {elections.filter(e => e.status === 'completed').length > 0 && (
             <div className="bg-white rounded-2xl p-6 border border-slate-200">
               <div className="flex items-center gap-3 mb-6">
                 <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center">
@@ -806,10 +801,7 @@ export const CandidateDashboard = () => {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {elections.filter(e => {
-                  const endDate = new Date(e.end_date);
-                  return endDate < new Date();
-                }).map((election) => {
+                {elections.filter(e => e.status === 'completed').map((election) => {
                   const endDate = new Date(election.end_date);
                   const myCandidate = myCandidates.find(c => c.election_id === election.id);
                   
